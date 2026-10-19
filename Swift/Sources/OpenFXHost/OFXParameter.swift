@@ -158,6 +158,22 @@ public final class OFXParameter: @unchecked Sendable {
 
   public var keyframeTimes: [Double] { lock.locked { keys.map(\.time) } }
 
+  /// The keyframes, in time order.
+  public var keyframes: [(time: Double, value: OFXParameterValue)] { lock.locked { keys } }
+
+  /// The value used when the parameter has no keyframes.
+  public var staticValue: OFXParameterValue { lock.locked { constant } }
+
+  /// Replaces the whole value state at once, e.g. to mirror a parameter that lives in another process.
+  public func restore(staticValue: OFXParameterValue, keyframes: [(time: Double, value: OFXParameterValue)]) {
+    let value = coerce(staticValue)
+    let keys = keyframes.map { (time: $0.time, value: coerce($0.value)) }.sorted { $0.time < $1.time }
+    lock.locked {
+      constant = value
+      self.keys = keys
+    }
+  }
+
   public func deleteKeyframe(at time: Double) -> Bool {
     lock.locked {
       guard let i = keys.firstIndex(where: { $0.time == time }) else { return false }
@@ -174,7 +190,7 @@ public final class OFXParameter: @unchecked Sendable {
     }
   }
 
-  private var currentTime: Double? { parameterSet?.effect?.currentTime }
+  private var currentTime: Double? { parameterSet?.currentTime }
 
   /// Makes `v` match this parameter's layout (e.g. accepts `.int` for a double param).
   private func coerce(_ v: OFXParameterValue) -> OFXParameterValue {
@@ -376,9 +392,31 @@ public final class OFXParameterSet {
   public private(set) var parameters: [OFXParameter] = []
   private var byName: [String: OFXParameter] = [:]
   public internal(set) weak var effect: OFXImageEffect?
+  private let timeSource: (() -> Double?)?
 
   init(effect: OFXImageEffect?) {
     self.effect = effect
+    self.timeSource = nil
+  }
+
+  /// A parameter set that is not attached to an effect, such as a host-side mirror
+  /// of a plug-in running in another process. `currentTime` supplies the time
+  /// untimed reads of animated parameters use.
+  public init(currentTime: @escaping () -> Double? = { nil }) {
+    self.effect = nil
+    self.timeSource = currentTime
+  }
+
+  /// The time untimed reads of animated parameters use.
+  var currentTime: Double? { effect?.currentTime ?? timeSource?() }
+
+  /// Adds a parameter with the given (already complete) properties, starting at its default value.
+  @discardableResult
+  public func addParameter(name: String, type: OFXParamType, properties: OFXPropertySet) -> OFXParameter {
+    let param = OFXParameter(name: name, type: type, properties: properties, parameterSet: self)
+    parameters.append(param)
+    byName[name] = param
+    return param
   }
 
   public var handle: OfxParamSetHandle { OpaquePointer(Unmanaged.passUnretained(self).toOpaque()) }

@@ -24,6 +24,8 @@ public final class OFXImageBuffer: @unchecked Sendable {
   public var byteCount: Int { rowBytes * height }
 
   private let ownsMemory: Bool
+  /// Keeps memory owned elsewhere (e.g. a locked IOSurface) alive for as long as the buffer.
+  private let owner: AnyObject?
 
   /// Allocates a zero-filled buffer.
   public init(bounds: OfxRectI, bitDepth: OFXBitDepth = .float, components: OFXImageComponents = .rgba,
@@ -41,6 +43,7 @@ public final class OFXImageBuffer: @unchecked Sendable {
     self.data = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 64)
     self.data.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     self.ownsMemory = true
+    self.owner = nil
   }
 
   public convenience init(width: Int, height: Int, bitDepth: OFXBitDepth = .float,
@@ -50,10 +53,11 @@ public final class OFXImageBuffer: @unchecked Sendable {
               bitDepth: bitDepth, components: components, premultiplication: premultiplication)
   }
 
-  /// Wraps memory owned elsewhere. The memory must outlive the buffer.
+  /// Wraps memory owned elsewhere. The memory must outlive the buffer; pass the
+  /// object that owns it as `owner` to have the buffer keep it alive.
   public init(wrapping data: UnsafeMutableRawPointer, bounds: OfxRectI, rowBytes: Int,
               bitDepth: OFXBitDepth, components: OFXImageComponents,
-              premultiplication: OFXPremultiplication = .premultiplied) {
+              premultiplication: OFXPremultiplication = .premultiplied, owner: AnyObject? = nil) {
     self.data = data
     self.bounds = bounds
     self.rowBytes = rowBytes
@@ -61,6 +65,7 @@ public final class OFXImageBuffer: @unchecked Sendable {
     self.components = components
     self.premultiplication = premultiplication
     self.ownsMemory = false
+    self.owner = owner
   }
 
   deinit {

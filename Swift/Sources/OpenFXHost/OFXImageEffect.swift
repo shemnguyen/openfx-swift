@@ -67,7 +67,7 @@ public class OFXImageEffect: @unchecked Sendable {
     p.set(kOfxPropPluginDescription, "")
     p.define(kOfxPropVersion, .int([Int(plugin.versionMajor), Int(plugin.versionMinor)]), readOnly: true)
     p.set(kOfxPropVersionLabel, "\(plugin.versionMajor).\(plugin.versionMinor)")
-    p.define(kOfxPluginPropFilePath, .string([plugin.bundle?.url.path ?? ""]), readOnly: true)
+    p.define(kOfxPluginPropFilePath, .string([plugin.filePath ?? ""]), readOnly: true)
     p[kOfxImageEffectPropSupportedContexts] = .string([])
     p[kOfxImageEffectPropSupportedPixelDepths] = .string([])
     p.set(kOfxImageEffectPluginPropGrouping, "")

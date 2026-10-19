@@ -20,12 +20,15 @@ public struct OFXMessage: CustomStringConvertible {
   }
 }
 
-/// An OpenFX host. Create one per application and keep it alive for as long
-/// as plug-ins are in use (plug-ins cache the host pointer they are given).
+/// An OpenFX host: the suites and objects plug-ins run against.
+///
+/// It runs where the plug-in code is, inside an app extension
+/// (`OpenFXAppExtension` creates one per extension process). Keep it alive for as
+/// long as plug-ins are in use, since plug-ins cache the host pointer they are given.
 ///
 /// ```swift
 /// let host = OFXHost()
-/// try host.loadPlugins(in: URL(fileURLWithPath: "/Library/OFX/Plugins"))
+/// for p in myRegistry.allPlugins { host.register(plugin: p) }
 /// for plugin in host.plugins { print(plugin.identifier, plugin.label) }
 /// ```
 public final class OFXHost: @unchecked Sendable {
@@ -63,8 +66,7 @@ public final class OFXHost: @unchecked Sendable {
     return message.type == .question ? .replyYes : .ok
   }
 
-  public private(set) var bundles: [OFXPluginBundle] = []
-  private var inProcessPlugins: [OFXImageEffectPlugin] = []
+  private var registered: [OFXImageEffectPlugin] = []
   private let lock = NSRecursiveLock()
 
   /// The most recently created host, which receives messages posted without an effect handle.
@@ -86,75 +88,35 @@ public final class OFXHost: @unchecked Sendable {
 
   /// All image effect plug-ins known to the host, in load order.
   public var plugins: [OFXImageEffectPlugin] {
-    lock.locked { bundles.flatMap(\.plugins) + inProcessPlugins }
+    lock.locked { registered }
   }
 
   public func plugin(withIdentifier identifier: String) -> OFXImageEffectPlugin? {
     plugins.first { $0.identifier == identifier }
   }
 
-  /// Loads one `.ofx.bundle`. Loading the same bundle twice returns the existing one.
-  @discardableResult
-  public func loadBundle(at url: URL) throws -> OFXPluginBundle {
-    try lock.locked {
-      let url = url.standardizedFileURL
-      if let existing = bundles.first(where: { $0.url == url }) { return existing }
-      let bundle = try OFXPluginBundle(url: url, host: self)
-      bundles.append(bundle)
-      return bundle
-    }
-  }
-
-  /// Recursively finds and loads every `.ofx.bundle` in `directory`.
+  /// Registers a plug-in whose code is already in this process: linked in
+  /// (Swift `OFXPluginRegistry`, statically linked C/C++), or loaded by an app
+  /// extension from its own bundle (`OpenFXAppExtension`).
   ///
-  /// - Returns: the bundles that loaded, and the errors for those that did not.
+  /// Host apps don't load plug-in code; they use plug-ins through app extensions
+  /// (`OpenFXExtensionKit`).
+  ///
+  /// - Returns: nil if the plug-in implements an API other than image effects v1.
   @discardableResult
-  public func loadPlugins(in directory: URL) -> (loaded: [OFXPluginBundle], failures: [(URL, Error)]) {
-    var loaded: [OFXPluginBundle] = []
-    var failures: [(URL, Error)] = []
-    for url in Self.findBundles(in: directory) {
-      do { loaded.append(try loadBundle(at: url)) } catch { failures.append((url, error)) }
-    }
-    return (loaded, failures)
-  }
-
-  /// Registers a plug-in that is linked into the current process rather than loaded from a bundle.
-  @discardableResult
-  public func register(plugin raw: UnsafeMutablePointer<OfxPlugin>) -> OFXImageEffectPlugin? {
+  public func register(plugin raw: UnsafeMutablePointer<OfxPlugin>, origin: String = "in-process",
+                       filePath: String? = nil) -> OFXImageEffectPlugin? {
     lock.locked {
       let api = raw.pointee.pluginApi.map { String(cString: $0) } ?? ""
       guard api == kOfxImageEffectPluginApi, raw.pointee.apiVersion == 1 else { return nil }
-      let plugin = OFXImageEffectPlugin(raw: raw, bundle: nil, host: self)
-      inProcessPlugins.append(plugin)
+      let plugin = OFXImageEffectPlugin(raw: raw, origin: origin, filePath: filePath, host: self)
+      registered.append(plugin)
       return plugin
     }
   }
 
-  /// Standard plug-in locations: `$OFX_PLUGIN_PATH` entries, then the platform default.
-  public static var defaultPluginDirectories: [URL] {
-    var dirs: [URL] = []
-    if let env = ProcessInfo.processInfo.environment["OFX_PLUGIN_PATH"] {
-      dirs += env.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
-    }
-    #if os(macOS)
-    dirs.append(URL(fileURLWithPath: "/Library/OFX/Plugins"))
-    #elseif os(Linux)
-    dirs.append(URL(fileURLWithPath: "/usr/OFX/Plugins"))
-    #endif
-    return dirs
-  }
-
-  static func findBundles(in directory: URL) -> [URL] {
-    let fm = FileManager.default
-    guard let e = fm.enumerator(at: directory, includingPropertiesForKeys: [.isDirectoryKey],
-                                options: [.skipsHiddenFiles]) else { return [] }
-    var found: [URL] = []
-    for case let url as URL in e where url.lastPathComponent.hasSuffix(".ofx.bundle") {
-      found.append(url)
-      e.skipDescendants()
-    }
-    return found.sorted { $0.path < $1.path }
-  }
+  /// The `OfxHost` struct handed to plug-ins (for `OfxSetHost`).
+  package var hostPointer: UnsafePointer<OfxHost> { UnsafePointer(rawHost) }
 
   // MARK: Messages
 
