@@ -56,3 +56,8 @@ Documentation/build
 Documentation/doxygen_build
 
 xizvuaie.fcz.txt
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
